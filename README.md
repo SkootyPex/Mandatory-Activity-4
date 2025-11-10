@@ -4,7 +4,6 @@ Implementation of Ricart-Argawala
 Missing: 
 - Mutual Exclusion
 - Request Queue
-- Lamport Clocks
 
 How to run:
 
