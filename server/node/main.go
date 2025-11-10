@@ -20,7 +20,7 @@ type server struct {
 
 func (s *server) RequestAccess(ctx context.Context, req *pb.Request) (*pb.Reply, error) {
 	s.clock.Receive(req.Timestamp)
-	log.Printf("%s got a request from %s Timestamp: %d", s.id, req.From, req.Timestamp)
+	log.Printf("%s (%d) got a request from %s Timestamp: %d", s.id, s.clock.Time(), req.From, req.Timestamp)
 	return &pb.Reply{From: s.id, Ok: true}, nil //always grant it for now, temp
 }
 
