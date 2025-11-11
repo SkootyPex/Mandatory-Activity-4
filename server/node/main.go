@@ -5,13 +5,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	pb "github.com/SkootyPex/mandatory-activity-4/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type server struct {
@@ -30,24 +33,49 @@ func (s *server) RequestAccess(ctx context.Context, req *pb.Request) (*pb.Reply,
 	defer s.mu.Unlock()
 
 	s.clock.Receive(req.Timestamp)
-	shouldDefer := false
+	deferTs := s.clock.Time()
 
-	if s.requestingCS {
-		if s.requestTime < req.Timestamp || (s.requestTime == req.Timestamp && s.id < req.From) {
-			shouldDefer = true
-		}
-	}
+	shouldDefer := s.requestingCS &&
+		(s.requestTime < req.Timestamp ||
+			(s.requestTime == req.Timestamp && s.id < req.From))
 
 	if shouldDefer {
 		s.deferred[req.From] = true
-		log.Printf("[%s at %d] Deferring reply to %s (timestamp = %d)",
-			s.id, s.clock.Time(), req.From, req.Timestamp)
+		log.Printf("[%s at %d] deferring reply to %s (timestamp = %d)", s.id, deferTs, req.From, req.Timestamp)
 		return &pb.Reply{From: s.id, Ok: false}, nil
 	}
 
 	log.Printf("[%s at %d] giving reply at %s (timestamp = %d)",
 		s.id, s.clock.Time(), req.From, req.Timestamp)
 	return &pb.Reply{From: s.id, Ok: true}, nil
+}
+
+func (s *server) waitForPeers() {
+	for {
+		allUp := true
+		for _, peer := range s.peers {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			conn, err := grpc.DialContext(
+				ctx,
+				peer,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
+
+			if err != nil {
+				allUp = false
+				log.Printf("[%s] waiting for %s.", s.id, peer)
+				continue
+			}
+			conn.Close()
+		}
+		if allUp {
+			log.Printf("[%s] all peers reachable", s.id)
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (s *server) enterCriticalSection() {
@@ -92,44 +120,57 @@ func (s *server) enterCriticalSection() {
 	s.mu.Unlock()
 }
 
+func generatePeers(total, self int) []string {
+	var peers []string
+	for i := 1; i <= total; i++ {
+		if i == self {
+			continue
+		}
+		peers = append(peers, fmt.Sprintf("localhost:%d", 50050+i))
+	}
+	return peers
+}
+
 func main() {
-	id := flag.String("id", "node1", "unique id")
-	port := flag.Int("port", 50051, "listening port")
-	peersFlag := flag.String("peers", "", "seperated list of addresses")
+	nodeNum := flag.Int("node", 1, "node number (1..N)")
+	totalNodes := flag.Int("total", 3, "total number of nodes")
 	flag.Parse()
+
+	id := fmt.Sprintf("node%d", *nodeNum)
+	port := 50050 + *nodeNum
+	logFile, _ := os.Create(fmt.Sprintf("%s.log", id))
+	log.SetOutput(logFile)
 
 	clock := &LamportClock{}
 	s := &server{
-		id:       *id,
+		id:       id,
 		clock:    clock,
 		deferred: make(map[string]bool),
+		peers:    generatePeers(*totalNodes, *nodeNum),
 	}
 
 	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
 			log.Fatalf("listening err: %v", err)
 		}
 		grpcServer := grpc.NewServer()
 		pb.RegisterMutexServer(grpcServer, s)
-		log.Printf("[%s] listening on %d", *id, *port)
+		log.Printf("[%s] listening on :%d, peers: %s", id, port, strings.Join(s.peers, ", "))
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
 
-	if *peersFlag != "" {
-		for _, p := range strings.Split(*peersFlag, ",") {
-			s.peers = append(s.peers, strings.TrimSpace(p))
+	s.waitForPeers()
+
+	go func() {
+		for {
+			delay := time.Duration(3+rand.Intn(5)) * time.Second
+			time.Sleep(delay)
+			s.enterCriticalSection()
 		}
-	}
-
-	time.Sleep(1 * time.Second)
-
-	if len(s.peers) > 0 {
-		time.Sleep(2 * time.Second)
-		s.enterCriticalSection()
-	}
+	}()
 
 	select {}
 }
