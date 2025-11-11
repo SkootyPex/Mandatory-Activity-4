@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -139,7 +140,9 @@ func main() {
 	id := fmt.Sprintf("node%d", *nodeNum)
 	port := 50050 + *nodeNum
 	logFile, _ := os.Create(fmt.Sprintf("%s.log", id))
-	log.SetOutput(logFile)
+	defer logFile.Close()
+	writer := io.MultiWriter(os.Stdout, logFile)
+	log.SetOutput(writer)
 
 	clock := &LamportClock{}
 	s := &server{
