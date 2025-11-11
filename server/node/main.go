@@ -90,7 +90,7 @@ func (s *server) enterCriticalSection() {
 	okCount := 0
 
 	for _, peer := range s.peers {
-		conn, err := grpc.Dial(peer, grpc.WithInsecure())
+		conn, err := grpc.NewClient(peer, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			log.Printf("[%s] could not reach %s, %v", s.id, peer, err)
 			continue
